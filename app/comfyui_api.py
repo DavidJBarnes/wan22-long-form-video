@@ -86,16 +86,33 @@ class ComfyUIClient:
         except Exception as e:
             return False, {}
 
+    def get_progress(self) -> dict:
+        """Get current execution progress from ComfyUI.
+        
+        Returns:
+            Dictionary with progress info (value, max, current_node, etc.)
+        """
+        try:
+            response = requests.get(f"{self.server_url}/progress", timeout=10)
+            if response.status_code == 200:
+                return response.json()
+        except Exception:
+            pass
+        return {}
+
     def wait_for_completion(
         self,
         prompt_id: str,
-        progress_callback=None
+        progress_callback=None,
+        total_nodes: int = 15
     ) -> tuple[bool, str, dict]:
         """Wait for a prompt to complete execution.
         
         Args:
             prompt_id: The prompt ID to wait for
             progress_callback: Optional callback function for progress updates
+                Signature: callback(percent: float, status_text: str)
+            total_nodes: Total number of nodes in the workflow (for progress estimation)
             
         Returns:
             Tuple of (success, message, output_data)
@@ -111,18 +128,48 @@ class ComfyUIClient:
                 # Check if execution is complete
                 if "outputs" in prompt_history:
                     outputs = prompt_history["outputs"]
+                    if progress_callback:
+                        progress_callback(1.0, "Generation complete")
                     return True, "Generation complete", outputs
                     
                 # Check for errors
                 if "status" in prompt_history:
                     status = prompt_history["status"]
-                    if status.get("status_str") == "error":
+                    status_str = status.get("status_str", "")
+                    
+                    if status_str == "error":
                         error_msg = status.get("messages", [])
                         return False, f"Generation failed: {error_msg}", {}
-            
-            # Update progress if callback provided
-            if progress_callback:
-                progress_callback(attempts, MAX_POLL_ATTEMPTS)
+                    
+                    # Try to extract progress from status
+                    if progress_callback:
+                        # Try to get executed nodes for progress
+                        executed = status.get("executed", [])
+                        current_node = status.get("current_node")
+                        
+                        # Calculate progress based on executed nodes
+                        if executed:
+                            percent = len(executed) / total_nodes
+                            status_text = f"Processing node {len(executed)}/{total_nodes}"
+                            if current_node:
+                                status_text = f"Running: {current_node}"
+                        else:
+                            # Fallback to time-based progress
+                            percent = min(0.95, attempts / (MAX_POLL_ATTEMPTS * 0.8))
+                            status_text = "Generating video..."
+                        
+                        progress_callback(percent, status_text)
+            else:
+                # Not in history yet - might be queued
+                if progress_callback:
+                    # Check queue status
+                    pending, running = self.get_queue_status()
+                    if running > 0:
+                        progress_callback(0.05, "Generation in progress...")
+                    elif pending > 0:
+                        progress_callback(0.0, f"Queued (position {pending})")
+                    else:
+                        progress_callback(0.0, "Waiting for server...")
             
             time.sleep(POLL_INTERVAL_SECONDS)
             attempts += 1

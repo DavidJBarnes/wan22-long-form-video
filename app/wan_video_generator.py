@@ -273,9 +273,9 @@ def render_generation_progress():
     """Render the generation progress view."""
     st.header(f"Generating Stage {st.session_state.current_stage} of {st.session_state.total_stages}")
     
-    # Progress bar
-    progress = st.session_state.current_stage / st.session_state.total_stages
-    st.progress(progress, text=f"Stage {st.session_state.current_stage}/{st.session_state.total_stages}")
+    # Overall stage progress bar
+    stage_progress = (st.session_state.current_stage - 1) / st.session_state.total_stages
+    st.progress(stage_progress, text=f"Overall: Stage {st.session_state.current_stage}/{st.session_state.total_stages}")
     
     # Show current starting frame
     col1, col2 = st.columns([1, 2])
@@ -290,37 +290,44 @@ def render_generation_progress():
         current_prompt = st.session_state.prompts[-1] if st.session_state.prompts else ""
         st.text_area("Prompt", value=current_prompt, disabled=True, height=100)
     
-    # Generation status
-    status_container = st.empty()
+    # Generation progress section
+    st.subheader("Generation Progress")
+    progress_bar = st.progress(0.0, text="Initializing...")
+    status_text = st.empty()
     
     # Start generation if not already running
     if st.session_state.current_prompt_id is None:
-        with status_container:
-            with st.spinner("Uploading image and starting generation..."):
-                success = start_stage_generation()
-                if not success:
-                    st.session_state.status = "error"
-                    st.rerun()
+        status_text.info("Uploading image and starting generation...")
+        success = start_stage_generation()
+        if not success:
+            st.session_state.status = "error"
+            st.rerun()
     
-    # Poll for completion
+    # Poll for completion with progress updates
     if st.session_state.current_prompt_id:
-        with status_container:
-            with st.spinner("Generating video segment... This may take several minutes."):
-                success, message, outputs = poll_generation()
-                
-                if success:
-                    # Process the output
-                    process_success = process_stage_output(outputs)
-                    if process_success:
-                        st.session_state.status = "review"
-                        st.session_state.current_prompt_id = None
-                    else:
-                        st.session_state.status = "error"
-                    st.rerun()
-                elif "timed out" in message.lower() or "failed" in message.lower():
-                    st.session_state.error_message = message
-                    st.session_state.status = "error"
-                    st.rerun()
+        status_text.info("Generating video segment... This may take several minutes.")
+        
+        # Create a progress callback that updates the UI
+        def update_progress(percent: float, status: str):
+            progress_bar.progress(min(percent, 1.0), text=status)
+            status_text.info(status)
+        
+        success, message, outputs = poll_generation_with_progress(update_progress)
+        
+        if success:
+            progress_bar.progress(1.0, text="Generation complete!")
+            # Process the output
+            process_success = process_stage_output(outputs)
+            if process_success:
+                st.session_state.status = "review"
+                st.session_state.current_prompt_id = None
+            else:
+                st.session_state.status = "error"
+            st.rerun()
+        elif "timed out" in message.lower() or "failed" in message.lower():
+            st.session_state.error_message = message
+            st.session_state.status = "error"
+            st.rerun()
 
 
 def start_stage_generation() -> bool:
@@ -366,42 +373,84 @@ def start_stage_generation() -> bool:
 
 
 def poll_generation() -> tuple[bool, str, dict]:
-    """Poll for generation completion."""
+    """Poll for generation completion (without progress callback)."""
     client = get_client()
     prompt_id = st.session_state.current_prompt_id
     
     return client.wait_for_completion(prompt_id)
 
 
+def poll_generation_with_progress(progress_callback) -> tuple[bool, str, dict]:
+    """Poll for generation completion with progress updates.
+    
+    Args:
+        progress_callback: Function to call with (percent, status_text) updates
+    """
+    client = get_client()
+    prompt_id = st.session_state.current_prompt_id
+    
+    # Our workflow has 15 nodes
+    return client.wait_for_completion(prompt_id, progress_callback=progress_callback, total_nodes=15)
+
+
 def process_stage_output(outputs: dict) -> bool:
     """Process the output from a completed stage."""
+    import json
+    
     client = get_client()
     config = st.session_state.config
     stage_num = st.session_state.current_stage
     output_dir = st.session_state.output_dir
     
+    # Debug: Log the outputs structure to help diagnose issues
+    debug_log_path = output_dir / "debug_outputs.json"
+    try:
+        with open(debug_log_path, "w") as f:
+            json.dump(outputs, f, indent=2, default=str)
+    except Exception:
+        pass  # Ignore debug logging errors
+    
     # Find the video output in the outputs
+    # ComfyUI may use different keys: "videos", "images", or "gifs"
     video_filename = None
     video_subfolder = ""
+    video_type = "output"
+    
+    # Video file extensions to look for
+    video_extensions = (".mp4", ".webm", ".gif", ".avi", ".mov")
     
     for node_id, node_output in outputs.items():
-        if "videos" in node_output:
-            for video_info in node_output["videos"]:
-                video_filename = video_info.get("filename")
-                video_subfolder = video_info.get("subfolder", "")
-                break
+        # Try common keys that ComfyUI uses for outputs
+        for key in ("videos", "images", "gifs"):
+            if key in node_output:
+                for item in node_output[key]:
+                    fname = item.get("filename", "")
+                    # Check if this is a video file by extension
+                    if fname.lower().endswith(video_extensions):
+                        video_filename = fname
+                        video_subfolder = item.get("subfolder", "")
+                        video_type = item.get("type", "output")
+                        break
+                if video_filename:
+                    break
         if video_filename:
             break
     
     if not video_filename:
-        st.session_state.error_message = "No video output found in generation results"
+        # Provide more helpful error message with debug info
+        available_keys = []
+        for node_id, node_output in outputs.items():
+            if isinstance(node_output, dict):
+                available_keys.append(f"Node {node_id}: {list(node_output.keys())}")
+        debug_info = "; ".join(available_keys) if available_keys else "No output nodes found"
+        st.session_state.error_message = f"No video output found in generation results. Debug: {debug_info}. Check {debug_log_path} for full output."
         return False
     
     # Download the video
     success, video_data = client.download_output(
         video_filename,
         subfolder=video_subfolder,
-        output_type="output"
+        output_type=video_type
     )
     
     if not success:
