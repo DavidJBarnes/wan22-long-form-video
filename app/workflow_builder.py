@@ -14,11 +14,14 @@ def build_workflow(
     fps: int = 16,
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
     output_prefix: str = "video/wan_segment",
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    high_noise_lora: Optional[str] = None,
+    low_noise_lora: Optional[str] = None
 ) -> dict:
     """Build a ComfyUI workflow JSON for Wan2.2 I2V generation.
     
     This creates a two-pass sampling workflow using the high_noise and low_noise models.
+    Optionally applies LoRA models to each pass.
     
     Args:
         positive_prompt: The positive prompt describing the video
@@ -30,6 +33,8 @@ def build_workflow(
         negative_prompt: The negative prompt
         output_prefix: Prefix for the output video filename
         seed: Random seed (if None, will be randomized)
+        high_noise_lora: Optional LoRA filename to apply to high noise model
+        low_noise_lora: Optional LoRA filename to apply to low noise model
         
     Returns:
         Dictionary containing the workflow JSON
@@ -38,6 +43,11 @@ def build_workflow(
         seed = random.randint(0, 2**53)
     
     params = GENERATION_PARAMS
+    
+    # Determine model input sources for ModelSamplingSD3 nodes
+    # If LoRA is used, it goes between UNETLoader and ModelSamplingSD3
+    high_noise_model_source = "3"  # Default: directly from UNETLoader
+    low_noise_model_source = "4"   # Default: directly from UNETLoader
     
     workflow = {
         # CLIPLoader - Text Encoder
@@ -75,24 +85,52 @@ def build_workflow(
                 "weight_dtype": "default"
             }
         },
-        
-        # ModelSamplingSD3 - High Noise Model
-        "5": {
-            "class_type": "ModelSamplingSD3",
+    }
+    
+    # Add LoRA nodes if specified
+    if high_noise_lora:
+        workflow["101"] = {
+            "class_type": "LoraLoaderModelOnly",
             "inputs": {
                 "model": ["3", 0],
-                "shift": params["model_sampling_shift"]
+                "lora_name": high_noise_lora,
+                "strength_model": 1.0
             }
-        },
-        
-        # ModelSamplingSD3 - Low Noise Model
-        "6": {
-            "class_type": "ModelSamplingSD3",
+        }
+        high_noise_model_source = "101"
+    
+    if low_noise_lora:
+        workflow["102"] = {
+            "class_type": "LoraLoaderModelOnly",
             "inputs": {
                 "model": ["4", 0],
-                "shift": params["model_sampling_shift"]
+                "lora_name": low_noise_lora,
+                "strength_model": 1.0
             }
-        },
+        }
+        low_noise_model_source = "102"
+    
+    # Add ModelSamplingSD3 nodes with correct model sources
+    workflow["5"] = {
+        # ModelSamplingSD3 - High Noise Model
+        "class_type": "ModelSamplingSD3",
+        "inputs": {
+            "model": [high_noise_model_source, 0],
+            "shift": params["model_sampling_shift"]
+        }
+    }
+    
+    workflow["6"] = {
+        # ModelSamplingSD3 - Low Noise Model
+        "class_type": "ModelSamplingSD3",
+        "inputs": {
+            "model": [low_noise_model_source, 0],
+            "shift": params["model_sampling_shift"]
+        }
+    }
+    
+    # Add remaining nodes
+    workflow.update({
         
         # CLIPTextEncode - Positive Prompt
         "7": {
@@ -205,7 +243,7 @@ def build_workflow(
                 "codec": "auto"
             }
         }
-    }
+    })
     
     return workflow
 

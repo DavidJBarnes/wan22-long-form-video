@@ -63,6 +63,10 @@ def init_session_state():
         "error_message": None,
         "comfyui_client": None,
         "output_dir": None,
+        # New: per-segment metadata for details view
+        "segment_metadata": [],  # List of dicts with runtime, start_time, end_time per segment
+        "selected_segment_index": 0,  # Currently selected segment in details view
+        "final_video_path": None,  # Path to final concatenated video
     }
     
     for key, value in defaults.items():
@@ -86,6 +90,9 @@ def reset_session():
     st.session_state.generation_start_time = None
     st.session_state.stage_start_time = None
     st.session_state.error_message = None
+    st.session_state.segment_metadata = []
+    st.session_state.selected_segment_index = 0
+    st.session_state.final_video_path = None
 
 
 def save_job_state():
@@ -115,6 +122,10 @@ def save_job_state():
         "stage_start_time": st.session_state.stage_start_time,
         "error_message": st.session_state.error_message,
         "output_dir": str(output_dir),
+        # New fields for segment details and video path
+        "segment_metadata": st.session_state.segment_metadata,
+        "selected_segment_index": st.session_state.selected_segment_index,
+        "final_video_path": str(st.session_state.final_video_path) if st.session_state.final_video_path else None,
     }
     
     try:
@@ -156,6 +167,10 @@ def load_job_state(job_dir: Path) -> bool:
         st.session_state.stage_start_time = state.get("stage_start_time")
         st.session_state.error_message = state.get("error_message")
         st.session_state.output_dir = Path(state["output_dir"]) if state.get("output_dir") else None
+        # New fields - use .get() with defaults for backward compatibility
+        st.session_state.segment_metadata = state.get("segment_metadata", [])
+        st.session_state.selected_segment_index = state.get("selected_segment_index", 0)
+        st.session_state.final_video_path = Path(state["final_video_path"]) if state.get("final_video_path") else None
         
         return True
     except Exception as e:
@@ -300,6 +315,32 @@ def render_configuration_form():
                 help="Base name for the final video file"
             )
         
+        # LoRA selection (optional)
+        st.subheader("LoRA Models (Optional)")
+        st.caption("Select LoRA models to apply during generation. Both are optional.")
+        
+        # Get available LoRAs from ComfyUI
+        client = get_client()
+        available_loras = client.get_loras()
+        lora_options = ["None"] + available_loras
+        
+        lora_col1, lora_col2 = st.columns(2)
+        with lora_col1:
+            high_noise_lora = st.selectbox(
+                "High Noise LoRA",
+                options=lora_options,
+                index=0,
+                help="LoRA to apply to the high noise model (first pass)"
+            )
+        
+        with lora_col2:
+            low_noise_lora = st.selectbox(
+                "Low Noise LoRA",
+                options=lora_options,
+                index=0,
+                help="LoRA to apply to the low noise model (second pass)"
+            )
+        
         st.subheader("Start Image")
         uploaded_image = st.file_uploader(
             "Upload the initial frame",
@@ -345,7 +386,7 @@ def render_configuration_form():
                 for error in errors:
                     st.error(error)
             else:
-                # Save configuration
+                # Save configuration (including LoRA selections)
                 st.session_state.config = {
                     "total_duration": total_duration,
                     "width": width,
@@ -354,6 +395,8 @@ def render_configuration_form():
                     "segment_duration": segment_duration,
                     "num_frames": num_frames,
                     "output_filename": output_filename,
+                    "high_noise_lora": high_noise_lora if high_noise_lora != "None" else None,
+                    "low_noise_lora": low_noise_lora if low_noise_lora != "None" else None,
                 }
                 
                 # Set up output directories
@@ -420,18 +463,25 @@ def render_generation_progress():
         client = get_client()
         prompt_id = st.session_state.current_prompt_id
         
-        # Poll once
-        poll_status, progress, outputs = client.poll_once(prompt_id)
+        # Poll once - returns 4 values now
+        poll_status, progress, outputs, progress_info = client.poll_once(prompt_id)
         
-        # Display current status
+        # Get actual percentage from progress_info
+        percent = progress_info.get("percent", progress * 100)
+        node_info = progress_info.get("node", "")
+        
+        # Display current status with actual progress
         if poll_status == "pending":
-            st.progress(0.1, text="Queued - waiting for server...")
+            st.progress(0.05, text="Queued - waiting for server...")
             st.info("Your generation is queued. Please wait...")
         elif poll_status == "running":
-            st.progress(0.5, text="Generating video segment...")
+            progress_text = f"{percent:.1f}% complete"
+            if node_info:
+                progress_text += f" - {node_info}"
+            st.progress(min(progress, 0.99), text=progress_text)
             st.info("Generation in progress... This may take several minutes.")
         elif poll_status == "complete":
-            st.progress(1.0, text="Generation complete!")
+            st.progress(1.0, text="100% - Generation complete!")
             st.success("Video segment generated successfully!")
             
             # Write debug log for successful completion
@@ -489,7 +539,9 @@ def start_stage_generation() -> bool:
         height=config["height"],
         num_frames=config["num_frames"],
         fps=config["fps"],
-        output_prefix=output_prefix
+        output_prefix=output_prefix,
+        high_noise_lora=config.get("high_noise_lora"),
+        low_noise_lora=config.get("low_noise_lora")
     )
     
     # Queue the prompt
@@ -759,22 +811,32 @@ def render_finalizing():
 
 def render_complete():
     """Render the completion screen."""
-    st.header("🎉 Video Generation Complete!")
+    st.header("Video Generation Complete!")
     
     output_dir = st.session_state.output_dir
     config = st.session_state.config
     
-    # Show final video if available
+    # Show final video if available - use bytes for reliable display
     final_path = output_dir / f"{config['output_filename']}_final.mp4"
+    
+    # Debug info for troubleshooting
+    st.caption(f"Final video path: {final_path}")
+    st.caption(f"File exists: {final_path.exists()}")
     
     if final_path.exists():
         st.subheader("Final Video")
-        st.video(str(final_path))
+        # Read video as bytes for reliable browser display
+        try:
+            with open(final_path, "rb") as f:
+                video_bytes = f.read()
+            st.video(video_bytes)
+        except Exception as e:
+            st.error(f"Error loading video: {e}")
         
         # Download button
         with open(final_path, "rb") as f:
             st.download_button(
-                "📥 Download Final Video",
+                "Download Final Video",
                 f,
                 file_name=final_path.name,
                 mime="video/mp4",
@@ -793,6 +855,8 @@ def render_complete():
                 st.metric("Resolution", f"{video_info['width']}x{video_info['height']}")
             with col4:
                 st.metric("FPS", f"{video_info['fps']:.1f}")
+    else:
+        st.warning("Final video file not found. Check if concatenation completed successfully.")
     
     # Generation summary
     st.subheader("Generation Summary")
@@ -810,23 +874,33 @@ def render_complete():
     with col2:
         st.metric("Output Directory", str(output_dir))
     
-    # Show all prompts
-    with st.expander("All Prompts Used", expanded=False):
+    # Show all prompts (Generation Log moved from sidebar)
+    with st.expander("Generation Log - All Prompts Used", expanded=False):
         for i, prompt in enumerate(st.session_state.prompts, 1):
             st.text(f"Stage {i}: {prompt}")
     
     # Actions
     st.divider()
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("🆕 Generate Another Video", use_container_width=True, type="primary"):
-            reset_session()
+        if st.button("Add Another Segment", use_container_width=True, type="primary"):
+            # Set up for adding a new segment
+            st.session_state.current_stage = len(st.session_state.segment_paths) + 1
+            st.session_state.total_stages = st.session_state.current_stage
+            # last_frame_path should already point to the last frame
+            st.session_state.status = "review"
+            save_job_state()
             st.rerun()
     
     with col2:
-        if st.button("📂 Open Output Folder", use_container_width=True):
+        if st.button("Generate New Video", use_container_width=True):
+            reset_session()
+            st.rerun()
+    
+    with col3:
+        if st.button("View Output Folder", use_container_width=True):
             st.info(f"Output saved to: {output_dir}")
 
 
@@ -860,37 +934,11 @@ def render_error():
 
 
 def render_sidebar():
-    """Render the sidebar with status and controls."""
+    """Render the sidebar with server status and job history only."""
     st.sidebar.title("Status")
     
     # Server status
     render_server_status()
-    
-    st.sidebar.divider()
-    
-    # Current session info
-    if st.session_state.status != "idle":
-        st.sidebar.subheader("Current Session")
-        st.sidebar.text(f"Status: {st.session_state.status}")
-        st.sidebar.text(f"Stage: {st.session_state.current_stage}/{st.session_state.total_stages}")
-        st.sidebar.text(f"Segments: {len(st.session_state.segment_paths)}")
-        
-        if st.session_state.generation_start_time:
-            elapsed = time.time() - st.session_state.generation_start_time
-            st.sidebar.text(f"Elapsed: {elapsed:.0f}s")
-        
-        # Show output directory
-        if st.session_state.output_dir:
-            st.sidebar.text(f"Output: {st.session_state.output_dir}")
-    
-    st.sidebar.divider()
-    
-    # Generation log
-    if st.session_state.prompts:
-        st.sidebar.subheader("Generation Log")
-        for i, prompt in enumerate(st.session_state.prompts, 1):
-            status_icon = "✓" if i < st.session_state.current_stage else ("⏳" if i == st.session_state.current_stage else "○")
-            st.sidebar.text(f"{status_icon} Stage {i}: {prompt[:30]}...")
     
     st.sidebar.divider()
     
@@ -899,21 +947,21 @@ def render_sidebar():
     saved_jobs = get_saved_jobs()
     
     if saved_jobs:
-        for job in saved_jobs[:5]:  # Show last 5 jobs
+        for job in saved_jobs[:10]:  # Show last 10 jobs
             status_emoji = {
-                "complete": "✓",
-                "generating": "⏳",
-                "review": "📝",
-                "error": "✗",
-                "idle": "○",
-            }.get(job["status"], "?")
+                "complete": "[done]",
+                "generating": "[gen]",
+                "review": "[review]",
+                "error": "[err]",
+                "idle": "[idle]",
+            }.get(job["status"], "[?]")
             
-            job_label = f"{status_emoji} {job['name'][:20]}... ({job['current_stage']}/{job['total_stages']})"
+            job_label = f"{status_emoji} {job['name'][:25]}..."
             
             if st.sidebar.button(job_label, key=f"job_{job['name']}", use_container_width=True):
                 # Load this job
                 if load_job_state(job["path"]):
-                    st.sidebar.success(f"Loaded job: {job['name']}")
+                    st.sidebar.success(f"Loaded: {job['name']}")
                     st.rerun()
                 else:
                     st.sidebar.error("Failed to load job")
@@ -922,22 +970,11 @@ def render_sidebar():
     
     st.sidebar.divider()
     
-    # Quick actions
-    st.sidebar.subheader("Quick Actions")
-    
-    if st.sidebar.button("🔄 Reset Session", use_container_width=True):
-        reset_session()
-        st.rerun()
-    
-    if st.session_state.status != "idle" and st.sidebar.button("💾 Save Progress", use_container_width=True):
-        save_job_state()
-        st.sidebar.success("Progress saved!")
-    
     # ffmpeg status
     if check_ffmpeg_available():
-        st.sidebar.success("✓ ffmpeg available")
+        st.sidebar.success("ffmpeg available")
     else:
-        st.sidebar.error("✗ ffmpeg not found")
+        st.sidebar.error("ffmpeg not found")
 
 
 def main():
