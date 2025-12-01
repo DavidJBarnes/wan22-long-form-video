@@ -88,6 +88,116 @@ def reset_session():
     st.session_state.error_message = None
 
 
+def save_job_state():
+    """Save current job state to disk for persistence across page refreshes."""
+    import json
+    
+    if not st.session_state.output_dir:
+        return
+    
+    output_dir = Path(st.session_state.output_dir)
+    state_file = output_dir / "job_state.json"
+    
+    # Build serializable state dict
+    state = {
+        "status": st.session_state.status,
+        "current_stage": st.session_state.current_stage,
+        "total_stages": st.session_state.total_stages,
+        "stages": st.session_state.stages,
+        "prompts": st.session_state.prompts,
+        "segment_paths": [str(p) for p in st.session_state.segment_paths],
+        "frame_paths": [str(p) for p in st.session_state.frame_paths],
+        "current_prompt_id": st.session_state.current_prompt_id,
+        "last_frame_path": str(st.session_state.last_frame_path) if st.session_state.last_frame_path else None,
+        "start_image_path": str(st.session_state.start_image_path) if st.session_state.start_image_path else None,
+        "config": st.session_state.config,
+        "generation_start_time": st.session_state.generation_start_time,
+        "stage_start_time": st.session_state.stage_start_time,
+        "error_message": st.session_state.error_message,
+        "output_dir": str(output_dir),
+    }
+    
+    try:
+        with open(state_file, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        pass  # Ignore save errors
+
+
+def load_job_state(job_dir: Path) -> bool:
+    """Load job state from disk.
+    
+    Returns:
+        True if state was loaded successfully, False otherwise
+    """
+    import json
+    
+    state_file = job_dir / "job_state.json"
+    if not state_file.exists():
+        return False
+    
+    try:
+        with open(state_file, "r") as f:
+            state = json.load(f)
+        
+        # Restore state
+        st.session_state.status = state.get("status", "idle")
+        st.session_state.current_stage = state.get("current_stage", 0)
+        st.session_state.total_stages = state.get("total_stages", 0)
+        st.session_state.stages = state.get("stages", [])
+        st.session_state.prompts = state.get("prompts", [])
+        st.session_state.segment_paths = [Path(p) for p in state.get("segment_paths", [])]
+        st.session_state.frame_paths = [Path(p) for p in state.get("frame_paths", [])]
+        st.session_state.current_prompt_id = state.get("current_prompt_id")
+        st.session_state.last_frame_path = Path(state["last_frame_path"]) if state.get("last_frame_path") else None
+        st.session_state.start_image_path = Path(state["start_image_path"]) if state.get("start_image_path") else None
+        st.session_state.config = state.get("config", {})
+        st.session_state.generation_start_time = state.get("generation_start_time")
+        st.session_state.stage_start_time = state.get("stage_start_time")
+        st.session_state.error_message = state.get("error_message")
+        st.session_state.output_dir = Path(state["output_dir"]) if state.get("output_dir") else None
+        
+        return True
+    except Exception as e:
+        return False
+
+
+def get_saved_jobs() -> list[dict]:
+    """Get list of saved jobs from the output directory.
+    
+    Returns:
+        List of job info dicts with name, path, status, and timestamp
+    """
+    import json
+    
+    output_base = Path(OUTPUT_DIR)
+    if not output_base.exists():
+        return []
+    
+    jobs = []
+    for job_dir in output_base.iterdir():
+        if job_dir.is_dir():
+            state_file = job_dir / "job_state.json"
+            if state_file.exists():
+                try:
+                    with open(state_file, "r") as f:
+                        state = json.load(f)
+                    jobs.append({
+                        "name": job_dir.name,
+                        "path": job_dir,
+                        "status": state.get("status", "unknown"),
+                        "current_stage": state.get("current_stage", 0),
+                        "total_stages": state.get("total_stages", 0),
+                        "config": state.get("config", {}),
+                    })
+                except Exception:
+                    pass
+    
+    # Sort by name (which includes timestamp) descending
+    jobs.sort(key=lambda x: x["name"], reverse=True)
+    return jobs
+
+
 def get_client() -> ComfyUIClient:
     """Get or create the ComfyUI client."""
     if st.session_state.comfyui_client is None:
@@ -270,7 +380,7 @@ def render_configuration_form():
 
 
 def render_generation_progress():
-    """Render the generation progress view."""
+    """Render the generation progress view using Streamlit's rerun pattern for live updates."""
     st.header(f"Generating Stage {st.session_state.current_stage} of {st.session_state.total_stages}")
     
     # Overall stage progress bar
@@ -292,42 +402,65 @@ def render_generation_progress():
     
     # Generation progress section
     st.subheader("Generation Progress")
-    progress_bar = st.progress(0.0, text="Initializing...")
-    status_text = st.empty()
     
     # Start generation if not already running
     if st.session_state.current_prompt_id is None:
-        status_text.info("Uploading image and starting generation...")
+        st.info("Uploading image and starting generation...")
         success = start_stage_generation()
         if not success:
             st.session_state.status = "error"
+            save_job_state()  # Save state before error
             st.rerun()
+        else:
+            save_job_state()  # Save state after starting
+            st.rerun()  # Rerun to start polling
     
-    # Poll for completion with progress updates
+    # Poll for completion using rerun pattern
     if st.session_state.current_prompt_id:
-        status_text.info("Generating video segment... This may take several minutes.")
+        client = get_client()
+        prompt_id = st.session_state.current_prompt_id
         
-        # Create a progress callback that updates the UI
-        def update_progress(percent: float, status: str):
-            progress_bar.progress(min(percent, 1.0), text=status)
-            status_text.info(status)
+        # Poll once
+        poll_status, progress, outputs = client.poll_once(prompt_id)
         
-        success, message, outputs = poll_generation_with_progress(update_progress)
-        
-        if success:
-            progress_bar.progress(1.0, text="Generation complete!")
+        # Display current status
+        if poll_status == "pending":
+            st.progress(0.1, text="Queued - waiting for server...")
+            st.info("Your generation is queued. Please wait...")
+        elif poll_status == "running":
+            st.progress(0.5, text="Generating video segment...")
+            st.info("Generation in progress... This may take several minutes.")
+        elif poll_status == "complete":
+            st.progress(1.0, text="Generation complete!")
+            st.success("Video segment generated successfully!")
+            
+            # Write debug log for successful completion
+            if st.session_state.output_dir:
+                client._write_debug_log(str(st.session_state.output_dir), prompt_id, {"outputs": outputs}, "success")
+            
             # Process the output
             process_success = process_stage_output(outputs)
             if process_success:
                 st.session_state.status = "review"
                 st.session_state.current_prompt_id = None
+                save_job_state()
             else:
                 st.session_state.status = "error"
+                save_job_state()
             st.rerun()
-        elif "timed out" in message.lower() or "failed" in message.lower():
-            st.session_state.error_message = message
+            return
+        elif poll_status == "error":
+            st.progress(0.0, text="Error!")
+            error_info = outputs.get("error", "Unknown error")
+            st.session_state.error_message = f"Generation failed: {error_info}"
             st.session_state.status = "error"
+            save_job_state()
             st.rerun()
+            return
+        
+        # If not complete, wait and rerun
+        time.sleep(2)  # Poll every 2 seconds
+        st.rerun()
 
 
 def start_stage_generation() -> bool:
@@ -745,6 +878,10 @@ def render_sidebar():
         if st.session_state.generation_start_time:
             elapsed = time.time() - st.session_state.generation_start_time
             st.sidebar.text(f"Elapsed: {elapsed:.0f}s")
+        
+        # Show output directory
+        if st.session_state.output_dir:
+            st.sidebar.text(f"Output: {st.session_state.output_dir}")
     
     st.sidebar.divider()
     
@@ -757,12 +894,44 @@ def render_sidebar():
     
     st.sidebar.divider()
     
+    # Job History
+    st.sidebar.subheader("Job History")
+    saved_jobs = get_saved_jobs()
+    
+    if saved_jobs:
+        for job in saved_jobs[:5]:  # Show last 5 jobs
+            status_emoji = {
+                "complete": "✓",
+                "generating": "⏳",
+                "review": "📝",
+                "error": "✗",
+                "idle": "○",
+            }.get(job["status"], "?")
+            
+            job_label = f"{status_emoji} {job['name'][:20]}... ({job['current_stage']}/{job['total_stages']})"
+            
+            if st.sidebar.button(job_label, key=f"job_{job['name']}", use_container_width=True):
+                # Load this job
+                if load_job_state(job["path"]):
+                    st.sidebar.success(f"Loaded job: {job['name']}")
+                    st.rerun()
+                else:
+                    st.sidebar.error("Failed to load job")
+    else:
+        st.sidebar.text("No saved jobs found")
+    
+    st.sidebar.divider()
+    
     # Quick actions
     st.sidebar.subheader("Quick Actions")
     
     if st.sidebar.button("🔄 Reset Session", use_container_width=True):
         reset_session()
         st.rerun()
+    
+    if st.session_state.status != "idle" and st.sidebar.button("💾 Save Progress", use_container_width=True):
+        save_job_state()
+        st.sidebar.success("Progress saved!")
     
     # ffmpeg status
     if check_ffmpeg_available():

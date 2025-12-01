@@ -103,33 +103,35 @@ class ComfyUIClient:
     def wait_for_completion(
         self,
         prompt_id: str,
-        progress_callback=None,
-        total_nodes: int = 15
+        debug_dir: str = None
     ) -> tuple[bool, str, dict]:
         """Wait for a prompt to complete execution.
         
         Args:
             prompt_id: The prompt ID to wait for
-            progress_callback: Optional callback function for progress updates
-                Signature: callback(percent: float, status_text: str)
-            total_nodes: Total number of nodes in the workflow (for progress estimation)
+            debug_dir: Optional directory to write debug logs
             
         Returns:
             Tuple of (success, message, output_data)
         """
         attempts = 0
+        last_history = None
         
         while attempts < MAX_POLL_ATTEMPTS:
             success, history = self.get_history(prompt_id)
             
             if success and prompt_id in history:
                 prompt_history = history[prompt_id]
+                last_history = prompt_history
                 
                 # Check if execution is complete
                 if "outputs" in prompt_history:
                     outputs = prompt_history["outputs"]
-                    if progress_callback:
-                        progress_callback(1.0, "Generation complete")
+                    
+                    # Debug: Write the full history to a file
+                    if debug_dir:
+                        self._write_debug_log(debug_dir, prompt_id, prompt_history, "success")
+                    
                     return True, "Generation complete", outputs
                     
                 # Check for errors
@@ -139,42 +141,65 @@ class ComfyUIClient:
                     
                     if status_str == "error":
                         error_msg = status.get("messages", [])
+                        # Debug: Write error history
+                        if debug_dir:
+                            self._write_debug_log(debug_dir, prompt_id, prompt_history, "error")
                         return False, f"Generation failed: {error_msg}", {}
-                    
-                    # Try to extract progress from status
-                    if progress_callback:
-                        # Try to get executed nodes for progress
-                        executed = status.get("executed", [])
-                        current_node = status.get("current_node")
-                        
-                        # Calculate progress based on executed nodes
-                        if executed:
-                            percent = len(executed) / total_nodes
-                            status_text = f"Processing node {len(executed)}/{total_nodes}"
-                            if current_node:
-                                status_text = f"Running: {current_node}"
-                        else:
-                            # Fallback to time-based progress
-                            percent = min(0.95, attempts / (MAX_POLL_ATTEMPTS * 0.8))
-                            status_text = "Generating video..."
-                        
-                        progress_callback(percent, status_text)
-            else:
-                # Not in history yet - might be queued
-                if progress_callback:
-                    # Check queue status
-                    pending, running = self.get_queue_status()
-                    if running > 0:
-                        progress_callback(0.05, "Generation in progress...")
-                    elif pending > 0:
-                        progress_callback(0.0, f"Queued (position {pending})")
-                    else:
-                        progress_callback(0.0, "Waiting for server...")
             
             time.sleep(POLL_INTERVAL_SECONDS)
             attempts += 1
         
+        # Timeout - write debug log if we have any history
+        if debug_dir and last_history:
+            self._write_debug_log(debug_dir, prompt_id, last_history, "timeout")
+        
         return False, "Generation timed out", {}
+    
+    def _write_debug_log(self, debug_dir: str, prompt_id: str, history: dict, status: str):
+        """Write debug log to file."""
+        try:
+            import os
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_path = os.path.join(debug_dir, f"debug_history_{prompt_id}_{status}.json")
+            with open(debug_path, "w") as f:
+                json.dump(history, f, indent=2, default=str)
+        except Exception as e:
+            pass  # Ignore debug logging errors
+    
+    def poll_once(self, prompt_id: str) -> tuple[str, float, dict]:
+        """Poll for completion once and return status.
+        
+        Returns:
+            Tuple of (status, progress, outputs_or_empty)
+            status: "pending", "running", "complete", "error"
+            progress: 0.0 to 1.0
+            outputs: dict of outputs if complete, empty dict otherwise
+        """
+        success, history = self.get_history(prompt_id)
+        
+        if not success or prompt_id not in history:
+            # Check queue status
+            pending, running = self.get_queue_status()
+            if running > 0:
+                return "running", 0.1, {}
+            elif pending > 0:
+                return "pending", 0.0, {}
+            return "pending", 0.0, {}
+        
+        prompt_history = history[prompt_id]
+        
+        # Check if complete
+        if "outputs" in prompt_history:
+            return "complete", 1.0, prompt_history["outputs"]
+        
+        # Check for errors
+        if "status" in prompt_history:
+            status = prompt_history["status"]
+            if status.get("status_str") == "error":
+                return "error", 0.0, {"error": status.get("messages", [])}
+        
+        # Still running
+        return "running", 0.5, {}
 
     def download_output(
         self,
