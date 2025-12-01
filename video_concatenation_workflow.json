@@ -1,0 +1,287 @@
+{
+  "id": "video-concatenation-workflow",
+  "revision": 0,
+  "last_node_id": 20,
+  "last_link_id": 25,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [-400, -200],
+      "size": [400, 300],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Video Concatenation Workflow",
+      "properties": {},
+      "widgets_values": [
+        "VIDEO CONCATENATION WORKFLOW\n\nThis workflow combines multiple video segments into a single final video.\n\nHOW TO USE:\n1. Load each video segment using the LoadVideo nodes\n2. Add more LoadVideo + ConcatVideo nodes as needed for more segments\n3. Set the output filename in the SaveVideo node\n4. Queue the workflow to concatenate all segments\n\nNOTE: Videos must have the same resolution and FPS to concatenate properly.\n\nFor more than 3 segments, duplicate the pattern:\n- Add LoadVideo node for segment N\n- Add ConcatVideo node connecting previous result + new segment"
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 2,
+      "type": "Note",
+      "pos": [-400, 150],
+      "size": [400, 150],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Adding More Segments",
+      "properties": {},
+      "widgets_values": [
+        "TO ADD MORE SEGMENTS:\n\n1. Right-click > Add Node > Video > LoadVideo\n2. Right-click > Add Node > Video > ConcatVideo\n3. Connect previous ConcatVideo output to new ConcatVideo input 1\n4. Connect new LoadVideo to new ConcatVideo input 2\n5. Update final SaveVideo connection"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 10,
+      "type": "LoadVideo",
+      "pos": [50, -200],
+      "size": [300, 150],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "slot_index": 0,
+          "links": [10]
+        }
+      ],
+      "title": "Load Segment 1",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": ["multi_stage_video/segment_00001.mp4"]
+    },
+    {
+      "id": 11,
+      "type": "LoadVideo",
+      "pos": [50, 0],
+      "size": [300, 150],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "slot_index": 0,
+          "links": [11]
+        }
+      ],
+      "title": "Load Segment 2",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": ["multi_stage_video/segment_00002.mp4"]
+    },
+    {
+      "id": 12,
+      "type": "LoadVideo",
+      "pos": [50, 200],
+      "size": [300, 150],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "slot_index": 0,
+          "links": [12]
+        }
+      ],
+      "title": "Load Segment 3",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": ["multi_stage_video/segment_00003.mp4"]
+    },
+    {
+      "id": 13,
+      "type": "ConcatVideo",
+      "pos": [400, -100],
+      "size": [200, 80],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video1",
+          "type": "VIDEO",
+          "link": 10
+        },
+        {
+          "name": "video2",
+          "type": "VIDEO",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "slot_index": 0,
+          "links": [13]
+        }
+      ],
+      "title": "Concat 1+2",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "ConcatVideo"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 14,
+      "type": "ConcatVideo",
+      "pos": [650, 50],
+      "size": [200, 80],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video1",
+          "type": "VIDEO",
+          "link": 13
+        },
+        {
+          "name": "video2",
+          "type": "VIDEO",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "slot_index": 0,
+          "links": [14]
+        }
+      ],
+      "title": "Concat (1+2)+3",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "ConcatVideo"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 15,
+      "type": "SaveVideo",
+      "pos": [900, 0],
+      "size": [400, 400],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 14
+        }
+      ],
+      "outputs": [],
+      "title": "Save Final Video",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "SaveVideo"
+      },
+      "widgets_values": [
+        "multi_stage_video/final_output",
+        "auto",
+        "auto"
+      ]
+    },
+    {
+      "id": 16,
+      "type": "Note",
+      "pos": [900, -150],
+      "size": [300, 100],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Output",
+      "properties": {},
+      "widgets_values": [
+        "Final concatenated video saved to:\noutput/multi_stage_video/final_output_*.mp4"
+      ],
+      "color": "#232",
+      "bgcolor": "#353"
+    }
+  ],
+  "links": [
+    [10, 10, 0, 13, 0, "VIDEO"],
+    [11, 11, 0, 13, 1, "VIDEO"],
+    [12, 12, 0, 14, 1, "VIDEO"],
+    [13, 13, 0, 14, 0, "VIDEO"],
+    [14, 14, 0, 15, 0, "VIDEO"]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "Load Video Segments",
+      "bounding": [30, -250, 340, 450],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "Concatenate Videos",
+      "bounding": [380, -150, 500, 330],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "Save Final Output",
+      "bounding": [880, -180, 450, 450],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "Instructions",
+      "bounding": [-420, -250, 450, 600],
+      "color": "#8b4513",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7,
+      "offset": [400, 300]
+    },
+    "frontendVersion": "1.25.11"
+  },
+  "version": 0.4
+}
