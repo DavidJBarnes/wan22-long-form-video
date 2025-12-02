@@ -18,70 +18,38 @@ st.set_page_config(
 # Hide default Streamlit pages navigation and style custom nav
 st.markdown("""
 <style>
-    /* Hide default Streamlit pages navigation and remove gap */
+    /* Hide default Streamlit pages navigation */
     [data-testid="stSidebarNav"] {
-        display: none !important;
-        height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
+        display: none;
     }
     
-    /* Remove any parent container margins/padding */
-    section[data-testid="stSidebar"] > div:first-child {
-        padding-top: 1rem !important;
+    /* Style nav links */
+    .nav-link {
+        display: flex;
+        align-items: center;
+        padding: 0.5rem 0;
+        color: inherit;
+        text-decoration: none;
+        font-size: 1rem;
+        cursor: pointer;
+        border: none;
+        background: none;
+        width: 100%;
+        text-align: left;
     }
     
-    /* Hide the default nav container completely */
-    section[data-testid="stSidebar"] [data-testid="stSidebarNav"],
-    section[data-testid="stSidebar"] [data-testid="stSidebarNav"] + div {
-        display: none !important;
+    .nav-link:hover {
+        color: #ff4b4b;
     }
     
-    /* Make sidebar nav buttons look like plain text links */
-    section[data-testid="stSidebar"] button[kind="secondary"],
-    section[data-testid="stSidebar"] button[kind="tertiary"],
-    section[data-testid="stSidebar"] button[kind="primary"] {
-        background: none !important;
-        border: none !important;
-        box-shadow: none !important;
-        padding: 0.25rem 0 !important;
-        text-align: left !important;
-        border-radius: 0 !important;
-        font-weight: normal !important;
+    .nav-link.active {
+        color: #ff4b4b;
+        font-weight: 600;
     }
     
-    section[data-testid="stSidebar"] button[kind="primary"] p {
-        color: #ff4b4b !important;
-        font-weight: 600 !important;
-    }
-    
-    section[data-testid="stSidebar"] button:hover {
-        background: none !important;
-    }
-    
-    section[data-testid="stSidebar"] button:hover p {
-        color: #ff4b4b !important;
-    }
-    
-    /* Job queue table styling */
-    .job-table-header {
-        background-color: #f0f0f0 !important;
-        padding: 0.5rem;
-        border-radius: 4px;
-        margin-bottom: 0.5rem;
-    }
-    
-    .job-table-header p {
-        font-weight: bold !important;
-        margin: 0 !important;
-    }
-    
-    .job-row-even {
-        background-color: #fafafa;
-    }
-    
-    .job-row-odd {
-        background-color: #ffffff;
+    .nav-icon {
+        margin-right: 0.75rem;
+        font-size: 1.1rem;
     }
 </style>
 """, unsafe_allow_html=True)
