@@ -22,19 +22,16 @@ st.markdown("""
     [data-testid="stSidebarNav"] {
         display: none !important;
         height: 0 !important;
+        min-height: 0 !important;
+        max-height: 0 !important;
         margin: 0 !important;
         padding: 0 !important;
+        overflow: hidden !important;
     }
     
     /* Remove any parent container margins/padding */
     section[data-testid="stSidebar"] > div:first-child {
         padding-top: 1rem !important;
-    }
-    
-    /* Hide the default nav container completely */
-    section[data-testid="stSidebar"] [data-testid="stSidebarNav"],
-    section[data-testid="stSidebar"] [data-testid="stSidebarNav"] + div {
-        display: none !important;
     }
     
     /* Make sidebar nav buttons look like plain text links */
