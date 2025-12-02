@@ -15,6 +15,45 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Hide default Streamlit pages navigation and style custom nav
+st.markdown("""
+<style>
+    /* Hide default Streamlit pages navigation */
+    [data-testid="stSidebarNav"] {
+        display: none;
+    }
+    
+    /* Style nav links */
+    .nav-link {
+        display: flex;
+        align-items: center;
+        padding: 0.5rem 0;
+        color: inherit;
+        text-decoration: none;
+        font-size: 1rem;
+        cursor: pointer;
+        border: none;
+        background: none;
+        width: 100%;
+        text-align: left;
+    }
+    
+    .nav-link:hover {
+        color: #ff4b4b;
+    }
+    
+    .nav-link.active {
+        color: #ff4b4b;
+        font-weight: 600;
+    }
+    
+    .nav-icon {
+        margin-right: 0.75rem;
+        font-size: 1.1rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Initialize session state for settings persistence
 def init_app_state():
     """Initialize application-wide session state."""
@@ -86,14 +125,11 @@ def get_default_settings():
 def render_sidebar():
     """Render the sidebar navigation."""
     with st.sidebar:
-        # App title with icon
+        # App title with icon at top left
         st.markdown("## 🎬 Wan2.2 Video Generator")
         st.divider()
         
-        # Navigation menu
-        st.markdown("### Navigation")
-        
-        # Navigation items with icons
+        # Navigation items with icons (link-style, left-justified)
         nav_items = [
             ("🏠", "Dashboard"),
             ("📋", "Job Queue"),
@@ -102,14 +138,21 @@ def render_sidebar():
         ]
         
         for icon, page_name in nav_items:
-            if st.button(
-                f"{icon} {page_name}",
-                key=f"nav_{page_name}",
-                use_container_width=True,
-                type="primary" if st.session_state.current_page == page_name else "secondary"
-            ):
-                st.session_state.current_page = page_name
-                st.rerun()
+            is_active = st.session_state.current_page == page_name
+            active_class = "active" if is_active else ""
+            
+            # Use columns to create left-justified clickable area
+            col1, col2 = st.columns([0.15, 0.85])
+            with col1:
+                st.markdown(f"<span style='font-size: 1.1rem;'>{icon}</span>", unsafe_allow_html=True)
+            with col2:
+                if st.button(
+                    page_name,
+                    key=f"nav_{page_name}",
+                    type="tertiary" if not is_active else "primary",
+                ):
+                    st.session_state.current_page = page_name
+                    st.rerun()
 
 
 def main():
