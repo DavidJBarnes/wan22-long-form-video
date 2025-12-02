@@ -164,15 +164,64 @@ def render_job_table(jobs: list[dict]):
         st.markdown('</div>', unsafe_allow_html=True)
 
 
+def cancel_job(job: dict):
+    """Cancel a job - remove from ComfyUI queue and update local state."""
+    client = get_comfyui_client()
+    
+    # Try to cancel in ComfyUI if there's an active prompt
+    prompt_id = job.get("current_prompt_id")
+    if prompt_id:
+        # First try to interrupt if it's running
+        client.interrupt_generation()
+        # Then delete from queue
+        success, msg = client.cancel_prompt(prompt_id)
+        if not success:
+            st.warning(f"Could not cancel in ComfyUI: {msg}")
+    
+    # Update local job state
+    job_path = job.get("path")
+    if job_path:
+        state_file = Path(job_path) / "job_state.json"
+        if state_file.exists():
+            try:
+                with open(state_file, "r") as f:
+                    state = json.load(f)
+                
+                state["status"] = "cancelled"
+                state["current_prompt_id"] = None
+                
+                with open(state_file, "w") as f:
+                    json.dump(state, f, indent=2)
+                
+                st.success("Job cancelled successfully")
+            except Exception as e:
+                st.error(f"Error updating job state: {e}")
+    
+    # Reset view state
+    st.session_state.show_job_detail = False
+    st.session_state.selected_job = None
+
+
 def render_job_detail(job: dict):
     """Render the job detail view with ComfyUI status."""
     st.subheader(f"Job: {job['name']}")
     
-    # Back button
-    if st.button("< Back to Job Queue"):
-        st.session_state.show_job_detail = False
-        st.session_state.selected_job = None
-        st.rerun()
+    # Action buttons row
+    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 4])
+    
+    with btn_col1:
+        if st.button("< Back to Job Queue"):
+            st.session_state.show_job_detail = False
+            st.session_state.selected_job = None
+            st.rerun()
+    
+    with btn_col2:
+        # Show cancel button for active jobs
+        job_status = job.get("status", "")
+        if job_status in ["generating", "idle", "pending", "review"]:
+            if st.button("Cancel Job", type="secondary"):
+                cancel_job(job)
+                st.rerun()
     
     st.divider()
     
@@ -240,18 +289,6 @@ def render_job_detail(job: dict):
     current_stage = job.get("current_stage", 0)
     start_image_path = job.get("start_image_path")
     
-    # Show start image first
-    if start_image_path and Path(start_image_path).exists():
-        with st.container(border=True):
-            cols = st.columns([1, 4, 1])
-            with cols[0]:
-                st.markdown("**Start Image**")
-                st.markdown(":blue[Input]")
-            with cols[1]:
-                st.markdown("*Initial frame for video generation*")
-            with cols[2]:
-                st.image(start_image_path, width=80)
-    
     if prompts or total_stages > 0:
         for i in range(max(len(prompts), total_stages)):
             stage_num = i + 1
@@ -275,26 +312,47 @@ def render_job_detail(job: dict):
                 status_icon = "[pending]"
                 status_color = "gray"
             
+            # Determine start thumbnail for this stage
+            if stage_num == 1:
+                # First stage uses the original start image
+                start_thumb = start_image_path
+            else:
+                # Subsequent stages use the final frame from previous stage
+                prev_index = i - 1
+                start_thumb = frame_paths[prev_index] if prev_index < len(frame_paths) else None
+            
+            # Determine final frame thumbnail for this stage
+            final_thumb = frame_paths[i] if i < len(frame_paths) else None
+            
             with st.container(border=True):
-                cols = st.columns([1, 4, 1])
+                # Layout: Start Image | Stage Info + Prompt | Status | Final Frame
+                cols = st.columns([1, 3, 1, 1])
                 
                 with cols[0]:
-                    st.markdown(f"**Stage {stage_num}**")
-                    st.markdown(f":{status_color}[{status_icon}]")
+                    st.caption("Start")
+                    if start_thumb and Path(start_thumb).exists():
+                        st.image(start_thumb, width=70)
+                    else:
+                        st.markdown("—")
                 
                 with cols[1]:
+                    st.markdown(f"**Stage {stage_num}**")
                     # Show prompt if available
                     if i < len(prompts):
-                        st.markdown(f"*{prompts[i][:100]}{'...' if len(prompts[i]) > 100 else ''}*")
+                        st.markdown(f"*{prompts[i][:80]}{'...' if len(prompts[i]) > 80 else ''}*")
                     else:
                         st.markdown("*Prompt pending...*")
                 
                 with cols[2]:
-                    # Show thumbnail if segment is complete
-                    if i < len(frame_paths):
-                        frame_path = Path(frame_paths[i])
-                        if frame_path.exists():
-                            st.image(str(frame_path), width=80)
+                    st.caption("Status")
+                    st.markdown(f":{status_color}[{status_icon}]")
+                
+                with cols[3]:
+                    st.caption("Final")
+                    if final_thumb and Path(final_thumb).exists():
+                        st.image(final_thumb, width=70)
+                    else:
+                        st.markdown("—")
         
         # Future stages indicator
         if total_stages > len(prompts):

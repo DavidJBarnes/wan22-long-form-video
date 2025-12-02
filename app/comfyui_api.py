@@ -286,14 +286,14 @@ class ComfyUIClient:
 
     def upload_image(
         self,
-        image_path: Path,
+        image_path,
         subfolder: str = "",
         overwrite: bool = True
     ) -> tuple[bool, str, str]:
         """Upload an image to the ComfyUI server.
         
         Args:
-            image_path: Path to the image file
+            image_path: Path to the image file (can be Path or str)
             subfolder: Subfolder to upload to
             overwrite: Whether to overwrite existing files
             
@@ -301,6 +301,9 @@ class ComfyUIClient:
             Tuple of (success, message, uploaded_filename)
         """
         try:
+            # Ensure image_path is a Path object
+            image_path = Path(image_path)
+            
             with open(image_path, "rb") as f:
                 files = {
                     "image": (image_path.name, f, "image/png")
@@ -343,6 +346,45 @@ class ComfyUIClient:
             return 0, 0
         except Exception:
             return 0, 0
+
+    def cancel_prompt(self, prompt_id: str) -> tuple[bool, str]:
+        """Cancel/delete a prompt from the ComfyUI queue.
+        
+        Args:
+            prompt_id: The prompt ID to cancel
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            # ComfyUI uses POST to /queue with delete key to remove items
+            response = requests.post(
+                f"{self.server_url}/queue",
+                json={"delete": [prompt_id]},
+                timeout=10
+            )
+            if response.status_code == 200:
+                return True, "Prompt cancelled successfully"
+            return False, f"Failed to cancel: {response.text}"
+        except Exception as e:
+            return False, f"Error cancelling prompt: {str(e)}"
+    
+    def interrupt_generation(self) -> tuple[bool, str]:
+        """Interrupt the currently running generation.
+        
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            response = requests.post(
+                f"{self.server_url}/interrupt",
+                timeout=10
+            )
+            if response.status_code == 200:
+                return True, "Generation interrupted"
+            return False, f"Failed to interrupt: {response.text}"
+        except Exception as e:
+            return False, f"Error interrupting: {str(e)}"
 
     def get_loras(self) -> list[str]:
         """Get list of available LoRA models from ComfyUI.

@@ -90,6 +90,11 @@ def init_app_state():
         st.session_state.app_initialized = True
         st.session_state.current_page = "Dashboard"
         
+        # Initialize job queue state
+        st.session_state.setdefault("show_job_detail", False)
+        st.session_state.setdefault("selected_job", None)
+        st.session_state.setdefault("show_new_job_form", False)
+        
         # Load settings from file if exists
         settings_file = Path("app_settings.json")
         if settings_file.exists():
@@ -181,6 +186,11 @@ def render_sidebar():
                     type="tertiary" if not is_active else "primary",
                 ):
                     st.session_state.current_page = page_name
+                    # Reset job queue sub-view state when navigating
+                    if page_name == "Job Queue":
+                        st.session_state.show_job_detail = False
+                        st.session_state.selected_job = None
+                        st.session_state.show_new_job_form = False
                     st.rerun()
 
 
