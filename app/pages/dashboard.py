@@ -170,9 +170,13 @@ def render():
                     else:
                         st.markdown("🎬")
                 
-                # Name
+                # Name (clickable to view job details)
                 with cols[1]:
-                    st.markdown(f"**{job['name'][:25]}**")
+                    if st.button(job['name'][:25], key=f"dash_job_{job['name']}"):
+                        st.session_state.selected_job = job
+                        st.session_state.show_job_detail = True
+                        st.session_state.current_page = "Job Queue"
+                        st.rerun()
                 
                 # Status with color
                 with cols[2]:
