@@ -23,7 +23,7 @@ from config import (
     FRAMES_DIR,
 )
 from comfyui_api import ComfyUIClient
-from workflow_builder import build_workflow, calculate_stages, estimate_generation_time
+from workflow_builder import calculate_stages, estimate_generation_time
 
 
 def get_all_jobs() -> list[dict]:
@@ -65,30 +65,20 @@ def get_all_jobs() -> list[dict]:
                     else:
                         start_time_str = "Unknown"
                     
-                    # Get start image path
-                    start_image_path = state.get("start_image_path")
-                    if not start_image_path:
-                        # Try to find it in frames directory
-                        start_img = frames_dir / "start_image.png" if frames_dir.exists() else None
-                        if start_img and start_img.exists():
-                            start_image_path = str(start_img)
-                    
                     jobs.append({
                         "name": job_dir.name,
                         "path": str(job_dir),
                         "status": state.get("status", "unknown"),
                         "current_stage": state.get("current_stage", 0),
                         "total_stages": state.get("total_stages", 0),
-                        "created_on": start_time_str,
+                        "start_time": start_time_str,
                         "start_timestamp": start_time,
                         "thumbnail": thumbnail,
-                        "start_image_path": start_image_path,
                         "num_segments": len(state.get("segment_paths", [])),
                         "prompts": state.get("prompts", []),
                         "segment_paths": state.get("segment_paths", []),
                         "frame_paths": state.get("frame_paths", []),
                         "config": state.get("config", {}),
-                        "current_prompt_id": state.get("current_prompt_id"),
                     })
                 except Exception:
                     continue
@@ -98,37 +88,35 @@ def get_all_jobs() -> list[dict]:
 
 def render_job_table(jobs: list[dict]):
     """Render the job queue table with headers always visible."""
-    # Table header with grey background
-    st.markdown('<div class="job-table-header">', unsafe_allow_html=True)
+    # Table header - always show
     header_cols = st.columns([0.6, 2.5, 1.5, 1, 1, 0.8])
     with header_cols[0]:
         st.markdown("**Thumb**")
     with header_cols[1]:
         st.markdown("**Name**")
     with header_cols[2]:
-        st.markdown("**Created On**")
+        st.markdown("**Start Time**")
     with header_cols[3]:
         st.markdown("**Status**")
     with header_cols[4]:
         st.markdown("**Progress**")
     with header_cols[5]:
         st.markdown("**Segs**")
-    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.divider()
     
     # Show message if no jobs
     if not jobs:
         st.info("No jobs in the queue. Click 'New Job' to start generating videos!")
         return
     
-    # Table rows with alternating colors
+    # Table rows
     for i, job in enumerate(jobs):
-        row_class = "job-row-even" if i % 2 == 0 else "job-row-odd"
-        st.markdown(f'<div class="{row_class}">', unsafe_allow_html=True)
         cols = st.columns([0.6, 2.5, 1.5, 1, 1, 0.8])
         
         with cols[0]:
             # Thumbnail
-            if job.get("thumbnail") and Path(job["thumbnail"]).exists():
+            if job["thumbnail"] and Path(job["thumbnail"]).exists():
                 st.image(job["thumbnail"], width=50)
             else:
                 st.markdown("🎬")
@@ -141,7 +129,7 @@ def render_job_table(jobs: list[dict]):
                 st.rerun()
         
         with cols[2]:
-            st.markdown(job.get("created_on", "Unknown"))
+            st.markdown(job["start_time"])
         
         with cols[3]:
             status = job["status"]
@@ -161,11 +149,10 @@ def render_job_table(jobs: list[dict]):
         
         with cols[5]:
             st.markdown(f"{job['num_segments']}")
-        st.markdown('</div>', unsafe_allow_html=True)
 
 
 def render_job_detail(job: dict):
-    """Render the job detail view with ComfyUI status."""
+    """Render the job detail view."""
     st.subheader(f"Job: {job['name']}")
     
     # Back button
@@ -181,6 +168,15 @@ def render_job_detail(job: dict):
     
     with col1:
         status = job["status"]
+        status_colors = {
+            "complete": "green",
+            "generating": "orange",
+            "review": "blue",
+            "error": "red",
+            "idle": "gray",
+            "finalizing": "orange",
+        }
+        color = status_colors.get(status, "gray")
         st.metric("Status", status)
     
     with col2:
@@ -190,29 +186,7 @@ def render_job_detail(job: dict):
         st.metric("Segments", job['num_segments'])
     
     with col4:
-        st.metric("Created On", job.get('created_on', 'Unknown'))
-    
-    # Show ComfyUI status if job has an active prompt
-    prompt_id = job.get("current_prompt_id")
-    if prompt_id and job["status"] in ["generating", "idle"]:
-        st.divider()
-        st.markdown("**ComfyUI Status**")
-        client = get_comfyui_client()
-        poll_status, progress, outputs, progress_info = client.poll_once(prompt_id)
-        
-        if poll_status == "pending":
-            st.info("Queued - waiting for ComfyUI server...")
-        elif poll_status == "running":
-            percent = progress_info.get("percent", progress * 100)
-            node_info = progress_info.get("node", "")
-            progress_text = f"{percent:.1f}% complete"
-            if node_info:
-                progress_text += f" - {node_info}"
-            st.progress(min(progress, 0.99), text=progress_text)
-        elif poll_status == "complete":
-            st.success("Generation complete!")
-        elif poll_status == "error":
-            st.error(f"Generation failed: {outputs.get('error', 'Unknown error')}")
+        st.metric("Started", job['start_time'])
     
     st.divider()
     
@@ -238,19 +212,6 @@ def render_job_detail(job: dict):
     frame_paths = job.get("frame_paths", [])
     total_stages = job.get("total_stages", 0)
     current_stage = job.get("current_stage", 0)
-    start_image_path = job.get("start_image_path")
-    
-    # Show start image first
-    if start_image_path and Path(start_image_path).exists():
-        with st.container(border=True):
-            cols = st.columns([1, 4, 1])
-            with cols[0]:
-                st.markdown("**Start Image**")
-                st.markdown(":blue[Input]")
-            with cols[1]:
-                st.markdown("*Initial frame for video generation*")
-            with cols[2]:
-                st.image(start_image_path, width=80)
     
     if prompts or total_stages > 0:
         for i in range(max(len(prompts), total_stages)):
@@ -466,10 +427,36 @@ def render_new_job_form():
             help="Be descriptive about the motion and scene"
         )
         
-        # Calculate stage info (no timeline preview per user request)
+        # Calculate and display stage info
         num_frames = SEGMENT_DURATIONS[segment_duration]
         stages = calculate_stages(total_duration, fps)
         num_stages = len(stages)
+        time_estimate = estimate_generation_time(num_frames, num_stages)
+        
+        st.divider()
+        
+        # Timeline preview
+        st.markdown("**Timeline Preview**")
+        st.info(
+            f"This will generate **{num_stages} segments** of ~{segment_duration.split()[0]} seconds each. "
+            f"Estimated generation time: **{time_estimate}**"
+        )
+        
+        # Visual timeline representation
+        timeline_cols = st.columns(min(num_stages, 10))
+        for i, col in enumerate(timeline_cols):
+            if i < num_stages:
+                with col:
+                    st.markdown(f"**{i+1}**")
+                    if i == 0:
+                        st.markdown(":blue[Start]")
+                    elif i == num_stages - 1:
+                        st.markdown(":green[End]")
+                    else:
+                        st.markdown(":gray[...]")
+        
+        if num_stages > 10:
+            st.caption(f"... and {num_stages - 10} more segments")
         
         st.divider()
         
@@ -509,84 +496,37 @@ def render_new_job_form():
                 # Set up output directories using job name
                 output_dir = setup_output_directories(job_name.replace(" ", "_"))
                 
-                # Save the uploaded image locally
+                # Save the uploaded image
                 start_image_path = output_dir / FRAMES_DIR / "start_image.png"
                 with open(start_image_path, "wb") as f:
                     f.write(uploaded_image.getvalue())
                 
-                # Upload image to ComfyUI server
-                client = get_comfyui_client()
-                upload_success, upload_msg, uploaded_filename = client.upload_image(
-                    str(start_image_path),
-                    subfolder="input",
-                    overwrite=True
-                )
+                # Create initial job state
+                job_state = {
+                    "status": "idle",
+                    "current_stage": 1,
+                    "total_stages": num_stages,
+                    "stages": stages,
+                    "prompts": [initial_prompt],
+                    "segment_paths": [],
+                    "frame_paths": [],
+                    "config": config,
+                    "generation_start_time": time.time(),
+                    "output_dir": str(output_dir),
+                }
                 
-                if not upload_success:
-                    st.error(f"Failed to upload image to ComfyUI: {upload_msg}")
-                else:
-                    # Build workflow and submit to ComfyUI
-                    workflow = build_workflow(
-                        positive_prompt=initial_prompt,
-                        image_filename=uploaded_filename,
-                        width=width,
-                        height=height,
-                        num_frames=num_frames,
-                        fps=fps,
-                        negative_prompt=DEFAULT_NEGATIVE_PROMPT,
-                        output_prefix=output_filename,
-                        seed=None,  # Random seed
-                        high_noise_lora=config.get("high_noise_lora"),
-                        low_noise_lora=config.get("low_noise_lora"),
-                    )
-                    
-                    # Queue the prompt
-                    queue_success, queue_msg, prompt_id = client.queue_prompt(workflow)
-                    
-                    if not queue_success:
-                        st.error(f"Failed to queue job: {queue_msg}")
-                        # Still save job state but with error status
-                        job_state = {
-                            "status": "error",
-                            "error_message": queue_msg,
-                            "current_stage": 1,
-                            "total_stages": num_stages,
-                            "stages": stages,
-                            "prompts": [initial_prompt],
-                            "segment_paths": [],
-                            "frame_paths": [],
-                            "config": config,
-                            "generation_start_time": time.time(),
-                            "output_dir": str(output_dir),
-                            "start_image_path": str(start_image_path),
-                        }
-                    else:
-                        # Create job state with generating status and prompt_id
-                        job_state = {
-                            "status": "generating",
-                            "current_stage": 1,
-                            "total_stages": num_stages,
-                            "stages": stages,
-                            "prompts": [initial_prompt],
-                            "segment_paths": [],
-                            "frame_paths": [],
-                            "config": config,
-                            "generation_start_time": time.time(),
-                            "output_dir": str(output_dir),
-                            "start_image_path": str(start_image_path),
-                            "current_prompt_id": prompt_id,
-                            "uploaded_image_filename": uploaded_filename,
-                        }
-                        st.success(f"Job '{job_name}' submitted to ComfyUI queue!")
-                    
-                    # Save job state
-                    state_file = output_dir / "job_state.json"
-                    with open(state_file, "w") as f:
-                        json.dump(job_state, f, indent=2)
-                    
-                    # Reset form state
-                    st.session_state.show_new_job_form = False
-                    st.rerun()
+                # Save job state
+                state_file = output_dir / "job_state.json"
+                with open(state_file, "w") as f:
+                    json.dump(job_state, f, indent=2)
+                
+                st.success(f"Job '{job_name}' created successfully!")
+                st.info(f"Output directory: {output_dir}")
+                st.info("To start generation, use the legacy generator (`streamlit run wan_video_generator.py`) and load this job from the sidebar.")
+                
+                # Reset form state
+                st.session_state.show_new_job_form = False
+                st.rerun()
 
 
 def render():
